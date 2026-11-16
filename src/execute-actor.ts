@@ -5,7 +5,7 @@ import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 type RunnerMode = 'docker' | 'subprocess';
-const IMAGE = 'facet/node-actor-runner:1.0';
+const IMAGE = process.env.FACET_ACTOR_RUNNER_IMAGE ?? 'facet/node-actor-runner:1.0';
 const MAX_OUTPUT = 1024 * 1024;
 
 function runCommand(command: string, args: string[], timeoutMs: number, env?: NodeJS.ProcessEnv): Promise<void> {

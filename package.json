@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "test:docker": "FACET_DOCKER_TEST=1 vitest run test/docker-live.test.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.json && cp src/templates/*.mjs dist/templates/"
   },
