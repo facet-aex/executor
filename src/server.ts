@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { loadEnvFile } from 'node:process';
 import type { Hex } from 'viem';
 import { executeActor } from './execute-actor.js';
 import { canonicalJson, sha256Hex } from './canonical-json.js';
@@ -77,6 +78,7 @@ export function createExecutorServer(config: Config) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try { loadEnvFile(); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const config: Config = {
     runnerMode: process.env.FACET_RUNNER_MODE === 'subprocess' ? 'subprocess' : 'docker',
     runnerPrivateKey: process.env.FACET_RUNNER_PRIVATE_KEY as Hex,
