@@ -34,6 +34,23 @@ test('rejects unauthenticated execution', async () => {
   expect(response.statusCode).toBe(401);
 });
 
+test('signs a completed external API result only through the internal token', async () => {
+  const instance = app();
+  const payload = { runId: RUN_ID, facetId: FACET_ID, input: { value: 4 }, result: { quote: 42 } };
+  expect((await instance.inject({ method: 'POST', url: '/v1/sign-external-result', payload })).statusCode).toBe(401);
+  const response = await instance.inject({ method: 'POST', url: '/v1/sign-external-result', headers: { 'x-facet-executor-token': TOKEN }, payload });
+  expect(response.statusCode).toBe(200);
+  const body = response.json();
+  expect(body.itemCount).toBe(1);
+  expect(body.inputHash).toBe(`sha256:${sha('{"value":4}')}`);
+  expect(body.outputHash).toBe(`sha256:${sha('{"quote":42}')}`);
+  const digest = keccak256(encodePacked(
+    ['bytes32', 'bytes32', 'bytes32', 'bytes32', 'uint256'],
+    [keccak256(new TextEncoder().encode(RUN_ID)), keccak256(new TextEncoder().encode(FACET_ID)), `0x${sha('{"value":4}')}`, `0x${sha('{"quote":42}')}`, 1n],
+  ));
+  expect(await recoverMessageAddress({ message: { raw: digest }, signature: body.runnerSignature })).toBe(privateKeyToAccount(RUNNER_KEY).address);
+});
+
 test('executes an actor once and signs exact usage fields', async () => {
   const response = await app().inject({ method: 'POST', url: '/v1/execute', headers: { 'x-facet-executor-token': TOKEN }, payload: request() });
   expect(response.statusCode).toBe(200);

@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { Hex } from 'viem';
 import { executeActor } from './execute-actor.js';
-import { sha256Hex } from './canonical-json.js';
+import { canonicalJson, sha256Hex } from './canonical-json.js';
 import { signUsage, usageHashes } from './usage-proof.js';
 import { getTemplates } from './templates/index.js';
 import { runMarketAnalyst } from './templates/vn-market-analyst-agent.js';
@@ -27,6 +27,22 @@ export function createExecutorServer(config: Config) {
   const app = Fastify({ logger: false, bodyLimit: 512 * 1024 });
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/v1/templates', async () => ({ templates: await getTemplates() }));
+  app.post('/v1/sign-external-result', async (request, reply) => {
+    const provided = request.headers['x-facet-executor-token'];
+    const providedBytes = Buffer.from(typeof provided === 'string' ? provided : '');
+    const expectedBytes = Buffer.from(config.executorToken);
+    if (providedBytes.length !== expectedBytes.length || !timingSafeEqual(providedBytes, expectedBytes)) return reply.code(401).send({ error: 'UNAUTHORIZED' });
+    const body = request.body;
+    if (!record(body) || !UUID.test(String(body.runId)) || !UUID.test(String(body.facetId)) || !record(body.input) || body.result === undefined) return reply.code(400).send({ error: 'INVALID_REQUEST' });
+    try {
+      const inputHash = `sha256:${sha256Hex(canonicalJson(body.input))}`;
+      const outputHash = `sha256:${sha256Hex(canonicalJson(body.result))}`;
+      const runnerSignature = await signUsage(config.runnerPrivateKey, String(body.runId), String(body.facetId), inputHash, outputHash, 1);
+      return { inputHash, outputHash, itemCount: 1, runnerSignature };
+    } catch {
+      return reply.code(400).send({ error: 'INVALID_RESULT' });
+    }
+  });
   app.post('/v1/execute', async (request, reply) => {
     const provided = request.headers['x-facet-executor-token'];
     const providedBytes = Buffer.from(typeof provided === 'string' ? provided : '');
