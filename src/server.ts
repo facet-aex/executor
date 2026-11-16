@@ -5,6 +5,8 @@ import type { Hex } from 'viem';
 import { executeActor } from './execute-actor.js';
 import { sha256Hex } from './canonical-json.js';
 import { signUsage, usageHashes } from './usage-proof.js';
+import { getTemplates } from './templates/index.js';
+import { runMarketAnalyst } from './templates/vn-market-analyst-agent.js';
 
 interface Config {
   runnerMode: 'docker' | 'subprocess';
@@ -24,22 +26,30 @@ export function createExecutorServer(config: Config) {
   if (config.runnerMode === 'subprocess' && config.facetEnv !== 'local') throw new Error('Subprocess runner restricted to local');
   const app = Fastify({ logger: false, bodyLimit: 512 * 1024 });
   app.get('/health/live', async () => ({ status: 'ok' }));
+  app.get('/v1/templates', async () => ({ templates: await getTemplates() }));
   app.post('/v1/execute', async (request, reply) => {
     const provided = request.headers['x-facet-executor-token'];
     const providedBytes = Buffer.from(typeof provided === 'string' ? provided : '');
     const expectedBytes = Buffer.from(config.executorToken);
     if (providedBytes.length !== expectedBytes.length || !timingSafeEqual(providedBytes, expectedBytes)) return reply.code(401).send({ error: 'UNAUTHORIZED' });
     const body = request.body;
-    if (!record(body) || !UUID.test(String(body.runId)) || !UUID.test(String(body.facetId)) || !UUID.test(String(body.facetVersionId)) || !record(body.input) || body.facetType !== 'HOSTED_ACTOR') return reply.code(400).send({ error: 'INVALID_REQUEST' });
+    if (!record(body) || !UUID.test(String(body.runId)) || !UUID.test(String(body.facetId)) || !UUID.test(String(body.facetVersionId)) || !record(body.input) || !['HOSTED_ACTOR', 'AUTONOMOUS_AGENT'].includes(String(body.facetType))) return reply.code(400).send({ error: 'INVALID_REQUEST' });
     const timeoutMs = body.timeoutMs === undefined ? 15_000 : body.timeoutMs;
     if (!Number.isInteger(timeoutMs) || (timeoutMs as number) < 1 || (timeoutMs as number) > 30_000) return reply.code(400).send({ error: 'INVALID_TIMEOUT' });
     const bundle = body.actorBundle;
-    if (!record(bundle) || typeof bundle.code !== 'string' || bundle.code.length > 256 * 1024 || typeof bundle.imageDigest !== 'string' || !HASH.test(bundle.imageDigest)) return reply.code(400).send({ error: 'INVALID_ACTOR_BUNDLE' });
-    const actualDigest = `sha256:${sha256Hex(`${IMAGE}\n${bundle.code.trim()}`)}`;
-    if (actualDigest.toLowerCase() !== bundle.imageDigest.toLowerCase()) return reply.code(400).send({ error: 'IMAGE_DIGEST_MISMATCH' });
+    const agent = body.agentConfig;
+    if (body.facetType === 'HOSTED_ACTOR') {
+      if (!record(bundle) || typeof bundle.code !== 'string' || bundle.code.length > 256 * 1024 || typeof bundle.imageDigest !== 'string' || !HASH.test(bundle.imageDigest)) return reply.code(400).send({ error: 'INVALID_ACTOR_BUNDLE' });
+      const actualDigest = `sha256:${sha256Hex(`${IMAGE}\n${bundle.code.trim()}`)}`;
+      if (actualDigest.toLowerCase() !== bundle.imageDigest.toLowerCase()) return reply.code(400).send({ error: 'IMAGE_DIGEST_MISMATCH' });
+    } else if (!record(agent) || agent.erc8004ChainId !== 43113 || String(agent.erc8004Registry).toLowerCase() !== '0x8004a818bfb912233c491871b3d84c89a494bd9e' || !/^[1-9][0-9]*$/.test(String(agent.erc8004TokenId)) || agent.taskKind !== 'vn-market-analysis' || agent.code !== undefined) {
+      return reply.code(400).send({ error: 'INVALID_AGENT_CONFIG' });
+    }
     const started = Date.now();
     try {
-      const { result, dataset, logs } = await executeActor(bundle.code, body.input, timeoutMs as number, config.runnerMode);
+      const { result, dataset, logs } = body.facetType === 'HOSTED_ACTOR'
+        ? await executeActor((bundle as { code: string }).code, body.input, timeoutMs as number, config.runnerMode)
+        : await runMarketAnalyst(body.input, timeoutMs as number, config.runnerMode);
       const { inputHash, outputHash } = usageHashes(body.input, dataset);
       const runnerSignature = await signUsage(config.runnerPrivateKey, body.runId as string, body.facetId as string, inputHash, outputHash, dataset.length);
       return { status: 'SUCCEEDED', result, dataset, logs, usage: { itemCount: dataset.length, durationMs: Date.now() - started, outputHash, runnerSignature } };
