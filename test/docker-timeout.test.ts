@@ -16,6 +16,7 @@ test('force-removes a Docker container after execution timeout', async () => {
     await expect(executeActor('export default async () => ({})', {}, 30, 'docker')).rejects.toThrow('Actor timeout');
     const calls = await readFile(marker, 'utf8');
     expect(calls).toContain('run --rm');
+    expect(calls).toContain('--network=none');
     expect(calls).toContain('rm -f facet-run-');
   } finally {
     process.env.PATH = originalPath;

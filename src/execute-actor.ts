@@ -52,7 +52,7 @@ export async function executeActor(code: string, input: Record<string, unknown>,
       const gid = process.getgid?.() ?? 1000;
       try {
         await runCommand('docker', [
-          'run', '--rm', '--name', containerName, '--cpus=0.5', '--memory=128m', '--pids-limit=32', '--read-only',
+          'run', '--rm', '--name', containerName, '--network=none', '--cpus=0.5', '--memory=128m', '--pids-limit=32', '--read-only',
           '--cap-drop=ALL', '--security-opt=no-new-privileges', `--user=${uid}:${gid}`,
           '-v', `${resolve(work)}:/work:ro`, '-v', `${resolve(output)}:/output:rw`, IMAGE,
         ], timeoutMs + 1000);
