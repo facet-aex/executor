@@ -11,8 +11,10 @@ test('exposes exactly three canonical Vietnamese templates', async () => {
   try {
     const response = await app.inject({ method: 'GET', url: '/v1/templates' });
     expect(response.statusCode).toBe(200);
-    expect(response.json().templates.map((item: { slug: string }) => item.slug)).toEqual([
-      'vn-gold-fx-actor', 'vn-tech-news-actor', 'vn-market-analyst-agent',
+    expect(response.json().templates.map((item: { facetName: string; facetType: string }) => [item.facetName, item.facetType])).toEqual([
+      ['vn-gold-fx-actor', 'ACTOR'],
+      ['vn-tech-news-actor', 'ACTOR'],
+      ['vn-market-analyst-agent', 'AGENT'],
     ]);
   } finally { await app.close(); }
 });
@@ -42,7 +44,7 @@ test('agent refuses to claim analysis without sourced datasets', async () => {
   const app = createExecutorServer({ runnerMode: 'subprocess', runnerPrivateKey: KEY, executorToken: TOKEN, facetEnv: 'local' });
   try {
     const response = await app.inject({ method: 'POST', url: '/v1/execute', headers: { 'x-facet-executor-token': TOKEN }, payload: {
-      runId: '019a1234-5678-7abc-8def-123456789abc', facetId: '019a1234-5678-7abc-8def-123456789abd', facetVersionId: '019a1234-5678-7abc-8def-123456789abe', facetType: 'AUTONOMOUS_AGENT', input: { question: 'Phân tích thị trường?' }, timeoutMs: 15000,
+      runId: '019a1234-5678-7abc-8def-123456789abc', facetId: '019a1234-5678-7abc-8def-123456789abd', facetType: 'AGENT', input: { question: 'Phân tích thị trường?' }, timeoutMs: 15000,
       agentConfig: { erc8004ChainId: 43113, erc8004Registry: '0x8004A818BFB912233c491871b3d84c89A494BD9e', erc8004TokenId: '1', taskKind: 'vn-market-analysis' },
     } });
     expect(response.statusCode).toBe(422);
@@ -53,7 +55,7 @@ test('agent composes Actor datasets into a cited report', async () => {
   const app = createExecutorServer({ runnerMode: 'subprocess', runnerPrivateKey: KEY, executorToken: TOKEN, facetEnv: 'local' });
   try {
     const response = await app.inject({ method: 'POST', url: '/v1/execute', headers: { 'x-facet-executor-token': TOKEN }, payload: {
-      runId: '019a1234-5678-7abc-8def-123456789abc', facetId: '019a1234-5678-7abc-8def-123456789abd', facetVersionId: '019a1234-5678-7abc-8def-123456789abe', facetType: 'AUTONOMOUS_AGENT',
+      runId: '019a1234-5678-7abc-8def-123456789abc', facetId: '019a1234-5678-7abc-8def-123456789abd', facetType: 'AGENT',
       input: { question: 'Phân tích thị trường?', goldQuotes: [{ brand: 'SJC', buyVnd: 88000000, sellVnd: 90000000, asOf: '2026-01-01T00:00:00Z', sourceUrl: 'https://sjc.com.vn/' }], fxQuotes: [], articles: [{ title: 'AI tăng trưởng', text: 'AI tăng trưởng tốt tại Việt Nam', sourceUrl: 'https://example.org/story', asOf: '2026-01-01T00:00:00Z' }] },
       timeoutMs: 15000,
       agentConfig: { erc8004ChainId: 43113, erc8004Registry: '0x8004A818BFB912233c491871b3d84c89A494BD9e', erc8004TokenId: '1', taskKind: 'vn-market-analysis' },

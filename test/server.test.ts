@@ -17,9 +17,9 @@ afterEach(async () => { await server?.close(); server = undefined; });
 
 function request(overrides: Record<string, unknown> = {}) {
   return {
-    runId: RUN_ID, facetId: FACET_ID, facetVersionId: '019a1234-5678-7abc-8def-123456789abe',
-    facetType: 'HOSTED_ACTOR', input: { value: 4 }, timeoutMs: 15000,
-    actorBundle: { code: CODE, imageDigest: `sha256:${sha(`facet/node-actor-runner:1.0\n${CODE.trim()}`)}` },
+    runId: RUN_ID, facetId: FACET_ID,
+    facetType: 'ACTOR', input: { value: 4 }, timeoutMs: 15000,
+    actorBundle: { code: CODE, entrypoint: 'run', imageDigest: `sha256:${sha(`facet/node-actor-runner:1.0\n${CODE.trim()}`)}` },
     ...overrides,
   };
 }
@@ -72,9 +72,14 @@ test('rejects image-digest mismatch before execution', async () => {
   expect(response.statusCode).toBe(400);
 });
 
-test('rejects unsupported type and excessive timeout', async () => {
+test('rejects unsupported type, legacy fields, and excessive timeout', async () => {
   const instance = app();
-  for (const body of [request({ facetType: 'EXTERNAL_HTTP_API' }), request({ timeoutMs: 30001 })]) {
+  for (const body of [
+    request({ facetType: 'API' }),
+    request({ facetType: 'HOSTED_ACTOR' }),
+    request({ facetVersionId: '019a1234-5678-7abc-8def-123456789abe' }),
+    request({ timeoutMs: 30001 }),
+  ]) {
     const response = await instance.inject({ method: 'POST', url: '/v1/execute', headers: { 'x-facet-executor-token': TOKEN }, payload: body });
     expect(response.statusCode).toBe(400);
   }

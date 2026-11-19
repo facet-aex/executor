@@ -50,13 +50,13 @@ export function createExecutorServer(config: Config) {
     const expectedBytes = Buffer.from(config.executorToken);
     if (providedBytes.length !== expectedBytes.length || !timingSafeEqual(providedBytes, expectedBytes)) return reply.code(401).send({ error: 'UNAUTHORIZED' });
     const body = request.body;
-    if (!record(body) || !UUID.test(String(body.runId)) || !UUID.test(String(body.facetId)) || !UUID.test(String(body.facetVersionId)) || !record(body.input) || !['HOSTED_ACTOR', 'AUTONOMOUS_AGENT'].includes(String(body.facetType))) return reply.code(400).send({ error: 'INVALID_REQUEST' });
+    if (!record(body) || body.facetVersionId !== undefined || !UUID.test(String(body.runId)) || !UUID.test(String(body.facetId)) || !record(body.input) || !['ACTOR', 'AGENT'].includes(String(body.facetType))) return reply.code(400).send({ error: 'INVALID_REQUEST' });
     const timeoutMs = body.timeoutMs === undefined ? 15_000 : body.timeoutMs;
     if (!Number.isInteger(timeoutMs) || (timeoutMs as number) < 1 || (timeoutMs as number) > 30_000) return reply.code(400).send({ error: 'INVALID_TIMEOUT' });
     const bundle = body.actorBundle;
     const agent = body.agentConfig;
-    if (body.facetType === 'HOSTED_ACTOR') {
-      if (!record(bundle) || typeof bundle.code !== 'string' || bundle.code.length > 256 * 1024 || typeof bundle.imageDigest !== 'string' || !HASH.test(bundle.imageDigest)) return reply.code(400).send({ error: 'INVALID_ACTOR_BUNDLE' });
+    if (body.facetType === 'ACTOR') {
+      if (!record(bundle) || typeof bundle.code !== 'string' || bundle.code.length > 256 * 1024 || (bundle.entrypoint !== undefined && bundle.entrypoint !== 'run') || typeof bundle.imageDigest !== 'string' || !HASH.test(bundle.imageDigest)) return reply.code(400).send({ error: 'INVALID_ACTOR_BUNDLE' });
       const actualDigest = `sha256:${sha256Hex(`${IMAGE}\n${bundle.code.trim()}`)}`;
       if (actualDigest.toLowerCase() !== bundle.imageDigest.toLowerCase()) return reply.code(400).send({ error: 'IMAGE_DIGEST_MISMATCH' });
     } else if (!record(agent) || agent.erc8004ChainId !== 43113 || String(agent.erc8004Registry).toLowerCase() !== '0x8004a818bfb912233c491871b3d84c89a494bd9e' || !/^[1-9][0-9]*$/.test(String(agent.erc8004TokenId)) || agent.taskKind !== 'vn-market-analysis' || agent.code !== undefined) {
@@ -64,7 +64,7 @@ export function createExecutorServer(config: Config) {
     }
     const started = Date.now();
     try {
-      const { result, dataset, logs } = body.facetType === 'HOSTED_ACTOR'
+      const { result, dataset, logs } = body.facetType === 'ACTOR'
         ? await executeActor((bundle as { code: string }).code, body.input, timeoutMs as number, config.runnerMode)
         : await runMarketAnalyst(body.input, timeoutMs as number, config.runnerMode);
       const { inputHash, outputHash } = usageHashes(body.input, dataset);
