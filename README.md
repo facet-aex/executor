@@ -1,16 +1,30 @@
 # FACET Executor (`@facet/executor`)
 
-Isolated Docker Actor Sandbox Runner and ERC-8004 A2A Agent dispatcher (`:4030`) under [ADR-0015](../docs/architecture/decisions/ADR-0015-actorbazaar-docker-and-a2a-mvp.md).
+[![FACET](https://img.shields.io/badge/FACET-facet.briandev.space-050505?style=flat-square&labelColor=DFFF4F)](https://facet.briandev.space)
+[![Layer](https://img.shields.io/badge/SANDBOX-ACTOR%20RUNNER-0D0D0D?style=flat-square&labelColor=343434)](https://github.com/facet-aex)
 
-## Responsibilities
+> Isolated Docker sandbox runner for hosted `ACTOR` workloads and execution dispatcher for `AGENT` tasks.
 
-- Build and run `facet/node-actor-runner:1.0` (`node:22-alpine` + `cheerio`) containers with strict resource caps (`--cpus=0.5 --memory=128m --pids-limit=32 --read-only`).
-- Execute provider-pushed `HOSTED_ACTOR` ESM modules (`export default async function run(input) { ... }`) and return structured `dataset` items, `logs`, `outputHash`, and `runnerSignature`.
-- Execute `AUTONOMOUS_AGENT` (ERC-8004 bound A2A) tasks.
-- Provide the 2 Vietnamese Sample Actors (`vn-gold-fx-actor`, `vn-tech-news-actor`) and 1 Sample A2A Agent (`vn-market-analyst-agent`).
+## Overview
 
-## Endpoints
+`executor` runs untrusted provider code and agent workloads for **FACET**. It packages the hardened `facet/node-actor-runner` container image and exposes an internal execution API consumed by `gateway` and `control-api` previews.
 
-- `GET /health/live` — liveness probe
-- `GET /v1/templates` — built-in Vietnamese Actor & A2A Agent templates
-- `POST /v1/execute` — execute a `HOSTED_ACTOR` or `AUTONOMOUS_AGENT` run
+## Role in FACET
+
+- **Containerized Actor Sandbox:** Runs single-file ESM JavaScript `ACTOR` modules inside ephemeral, read-only Docker containers (`node:22-alpine` + `cheerio`) with strict CPU, memory, PID, and timeout limits.
+- **A2A Agent Execution:** Dispatches `AGENT` workloads bound to canonical `ERC-8004` identities and normalizes structured responses.
+- **Cryptographic Usage Proofs:** Computes canonical input/output hashes and dataset item counts, then signs an EIP-191 usage proof (`runnerSignature`) used for `TaskEscrow` settlement and `FacetReceiptLog` recording.
+- **Built-In Templates:** Provides starter ESM Actor and Agent templates for publishing and testing.
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Runtime & HTTP | Node.js 24 (ESM), TypeScript, Fastify 5 |
+| Sandbox Image | Docker sibling containers, `node:22-alpine`, `cheerio` |
+| Cryptography | `viem` (EIP-191 usage proof signing & keccak256 hashing) |
+| Testing & Container | Vitest, Docker (`node:24-alpine`) |
+
+---
+
+Part of **[FACET](https://facet.briandev.space)** (`facet-aex`) — Federated Agent Capability Exchange & Trust on Avalanche.
