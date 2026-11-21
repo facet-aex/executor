@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from 'vitest';
 import { privateKeyToAccount } from 'viem/accounts';
-import { encodePacked, keccak256, recoverMessageAddress } from 'viem';
+import { encodePacked, keccak256, recoverMessageAddress, verifyTypedData, type Address } from 'viem';
 import { createExecutorServer } from '../src/server.js';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 const RUNNER_KEY = `0x${'1'.repeat(64)}` as const;
+const FEE_SPLIT: Address = '0xc50cb5d5ff6c71eb1b065971c198a9edb0ecff06';
 const TOKEN = 'local-test-token-at-least-32-characters';
 const RUN_ID = '019a1234-5678-7abc-8def-123456789abc';
 const FACET_ID = '019a1234-5678-7abc-8def-123456789abd';
@@ -100,4 +101,118 @@ test('does not pass executor signing secrets to actor process', async () => {
   } finally {
     delete process.env.FACET_RUNNER_PRIVATE_KEY;
   }
+});
+
+const ESCROW_USAGE_TYPES = {
+  EscrowUsageProof: [
+    { name: 'runId', type: 'bytes32' },
+    { name: 'facetId', type: 'bytes32' },
+    { name: 'inputHash', type: 'bytes32' },
+    { name: 'outputHash', type: 'bytes32' },
+    { name: 'itemCount', type: 'uint256' },
+  ],
+} as const;
+
+test('signs EIP-712 escrowSignature bound to FeeSplit contract and chainId on execute and external sign', async () => {
+  server = createExecutorServer({
+    runnerMode: 'subprocess',
+    runnerPrivateKey: RUNNER_KEY,
+    executorToken: TOKEN,
+    facetEnv: 'local',
+    feeSplitAddress: FEE_SPLIT,
+    chainId: 43113,
+  });
+  const execRes = await server.inject({
+    method: 'POST',
+    url: '/v1/execute',
+    headers: { 'x-facet-executor-token': TOKEN },
+    payload: request(),
+  });
+  expect(execRes.statusCode).toBe(200);
+  const execBody = execRes.json();
+  expect(execBody.usage.escrowSignature).toMatch(/^0x[0-9a-f]{130}$/i);
+
+  const runnerAddress = privateKeyToAccount(RUNNER_KEY).address;
+  const runKey = keccak256(new TextEncoder().encode(RUN_ID));
+  const facetKey = keccak256(new TextEncoder().encode(FACET_ID));
+  const valid = await verifyTypedData({
+    address: runnerAddress,
+    domain: {
+      name: 'FacetFeeSplitAndEscrow',
+      version: '2',
+      chainId: 43113,
+      verifyingContract: FEE_SPLIT,
+    },
+    types: ESCROW_USAGE_TYPES,
+    primaryType: 'EscrowUsageProof',
+    message: {
+      runId: runKey,
+      facetId: facetKey,
+      inputHash: `0x${sha('{"value":4}')}`,
+      outputHash: `0x${sha('[{"value":4}]')}`,
+      itemCount: 1n,
+    },
+    signature: execBody.usage.escrowSignature,
+  });
+  expect(valid).toBe(true);
+
+  const wrongContract = await verifyTypedData({
+    address: runnerAddress,
+    domain: {
+      name: 'FacetFeeSplitAndEscrow',
+      version: '2',
+      chainId: 43113,
+      verifyingContract: '0x0000000000000000000000000000000000000001',
+    },
+    types: ESCROW_USAGE_TYPES,
+    primaryType: 'EscrowUsageProof',
+    message: {
+      runId: runKey,
+      facetId: facetKey,
+      inputHash: `0x${sha('{"value":4}')}`,
+      outputHash: `0x${sha('[{"value":4}]')}`,
+      itemCount: 1n,
+    },
+    signature: execBody.usage.escrowSignature,
+  });
+  expect(wrongContract).toBe(false);
+
+  const extRes = await server.inject({
+    method: 'POST',
+    url: '/v1/sign-external-result',
+    headers: { 'x-facet-executor-token': TOKEN },
+    payload: { runId: RUN_ID, facetId: FACET_ID, input: { value: 4 }, result: { quote: 42 } },
+  });
+  expect(extRes.statusCode).toBe(200);
+  const extBody = extRes.json();
+  expect(extBody.escrowSignature).toMatch(/^0x[0-9a-f]{130}$/i);
+  const extValid = await verifyTypedData({
+    address: runnerAddress,
+    domain: {
+      name: 'FacetFeeSplitAndEscrow',
+      version: '2',
+      chainId: 43113,
+      verifyingContract: FEE_SPLIT,
+    },
+    types: ESCROW_USAGE_TYPES,
+    primaryType: 'EscrowUsageProof',
+    message: {
+      runId: runKey,
+      facetId: facetKey,
+      inputHash: `0x${sha('{"value":4}')}`,
+      outputHash: `0x${sha('{"quote":42}')}`,
+      itemCount: 1n,
+    },
+    signature: extBody.escrowSignature,
+  });
+  expect(extValid).toBe(true);
+});
+
+test('fails closed outside local mode when feeSplitAddress is missing', () => {
+  expect(() => createExecutorServer({
+    runnerMode: 'docker',
+    runnerPrivateKey: RUNNER_KEY,
+    executorToken: TOKEN,
+    facetEnv: 'production',
+  })).toThrow(/FACET_FEE_SPLIT_ADDRESS/);
 });

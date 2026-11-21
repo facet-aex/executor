@@ -2,10 +2,11 @@ import Fastify from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { loadEnvFile } from 'node:process';
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
+import { isAddress } from 'viem';
 import { executeActor } from './execute-actor.js';
 import { canonicalJson, sha256Hex } from './canonical-json.js';
-import { signUsage, usageHashes } from './usage-proof.js';
+import { signEscrowUsage, signUsage, usageHashes } from './usage-proof.js';
 import { getTemplates } from './templates/index.js';
 import { runMarketAnalyst } from './templates/vn-market-analyst-agent.js';
 
@@ -14,6 +15,8 @@ interface Config {
   runnerPrivateKey: Hex;
   executorToken: string;
   facetEnv: string;
+  feeSplitAddress?: Address;
+  chainId?: number;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,6 +28,13 @@ export function createExecutorServer(config: Config) {
   if (!/^0x[0-9a-f]{64}$/i.test(config.runnerPrivateKey)) throw new Error('FACET_RUNNER_PRIVATE_KEY missing');
   if (config.executorToken.length < 32) throw new Error('FACET_EXECUTOR_TOKEN must have at least 32 characters');
   if (config.runnerMode === 'subprocess' && config.facetEnv !== 'local') throw new Error('Subprocess runner restricted to local');
+  if (config.feeSplitAddress !== undefined && !isAddress(config.feeSplitAddress)) {
+    throw new Error('FACET_FEE_SPLIT_ADDRESS invalid');
+  }
+  if (config.facetEnv !== 'local' && !config.feeSplitAddress) {
+    throw new Error('FACET_FEE_SPLIT_ADDRESS required outside local');
+  }
+  const chainId = config.chainId ?? 43113;
   const app = Fastify({ logger: false, bodyLimit: 512 * 1024 });
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/v1/templates', async () => ({ templates: await getTemplates() }));
@@ -39,7 +49,24 @@ export function createExecutorServer(config: Config) {
       const inputHash = `sha256:${sha256Hex(canonicalJson(body.input))}`;
       const outputHash = `sha256:${sha256Hex(canonicalJson(body.result))}`;
       const runnerSignature = await signUsage(config.runnerPrivateKey, String(body.runId), String(body.facetId), inputHash, outputHash, 1);
-      return { inputHash, outputHash, itemCount: 1, runnerSignature };
+      const escrowSignature = config.feeSplitAddress
+        ? await signEscrowUsage(config.runnerPrivateKey, {
+            chainId,
+            verifyingContract: config.feeSplitAddress,
+            runId: String(body.runId),
+            facetId: String(body.facetId),
+            inputHash,
+            outputHash,
+            itemCount: 1,
+          })
+        : undefined;
+      return {
+        inputHash,
+        outputHash,
+        itemCount: 1,
+        runnerSignature,
+        ...(escrowSignature ? { escrowSignature } : {}),
+      };
     } catch {
       return reply.code(400).send({ error: 'INVALID_RESULT' });
     }
@@ -69,7 +96,30 @@ export function createExecutorServer(config: Config) {
         : await runMarketAnalyst(body.input, timeoutMs as number, config.runnerMode);
       const { inputHash, outputHash } = usageHashes(body.input, dataset);
       const runnerSignature = await signUsage(config.runnerPrivateKey, body.runId as string, body.facetId as string, inputHash, outputHash, dataset.length);
-      return { status: 'SUCCEEDED', result, dataset, logs, usage: { itemCount: dataset.length, durationMs: Date.now() - started, outputHash, runnerSignature } };
+      const escrowSignature = config.feeSplitAddress
+        ? await signEscrowUsage(config.runnerPrivateKey, {
+            chainId,
+            verifyingContract: config.feeSplitAddress,
+            runId: body.runId as string,
+            facetId: body.facetId as string,
+            inputHash,
+            outputHash,
+            itemCount: dataset.length,
+          })
+        : undefined;
+      return {
+        status: 'SUCCEEDED',
+        result,
+        dataset,
+        logs,
+        usage: {
+          itemCount: dataset.length,
+          durationMs: Date.now() - started,
+          outputHash,
+          runnerSignature,
+          ...(escrowSignature ? { escrowSignature } : {}),
+        },
+      };
     } catch {
       return reply.code(422).send({ error: 'EXECUTION_FAILED' });
     }
@@ -79,11 +129,15 @@ export function createExecutorServer(config: Config) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try { loadEnvFile(); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  const feeSplitRaw = process.env.FACET_FEE_SPLIT_ADDRESS?.trim() || undefined;
+  const chainIdRaw = process.env.FACET_CHAIN_ID ? Number(process.env.FACET_CHAIN_ID) : 43113;
   const config: Config = {
     runnerMode: process.env.FACET_RUNNER_MODE === 'subprocess' ? 'subprocess' : 'docker',
     runnerPrivateKey: process.env.FACET_RUNNER_PRIVATE_KEY as Hex,
     executorToken: process.env.FACET_EXECUTOR_TOKEN ?? '',
     facetEnv: process.env.FACET_ENV ?? 'production',
+    ...(feeSplitRaw ? { feeSplitAddress: feeSplitRaw as Address } : {}),
+    chainId: Number.isSafeInteger(chainIdRaw) && chainIdRaw > 0 ? chainIdRaw : 43113,
   };
   const app = createExecutorServer(config);
   app.listen({ host: '0.0.0.0', port: Number(process.env.FACET_EXECUTOR_PORT ?? 4030) }).catch(() => { process.exitCode = 1; });
